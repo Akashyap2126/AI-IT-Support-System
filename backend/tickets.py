@@ -19,117 +19,142 @@ from ai_service import (
 tickets_bp = Blueprint("tickets", __name__)
 
 
+
 @tickets_bp.route("", methods=["POST"])
 @jwt_required()
 def create_ticket():
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
-    if not data:
-        return {"message": "Request body is required"}, 400
+    if not isinstance(data, dict):
+        return {"message": "A valid JSON request body is required"}, 400
 
     title = data.get("title")
     description = data.get("description")
     category = data.get("category")
 
-    if not title or not description:
-        return {"message": "Title and description are required"}, 400
+    # Validate title
+    if not isinstance(title, str) or not title.strip():
+        return {"message": "Title is required"}, 400
+
+    title = title.strip()
+
+    if len(title) > 200:
+        return {"message": "Title must not exceed 200 characters"}, 400
+
+    # Validate description
+    if not isinstance(description, str) or not description.strip():
+        return {"message": "Description is required"}, 400
+
+    description = description.strip()
+
+    if len(description) > 10000:
+        return {
+            "message": "Description must not exceed 10000 characters"
+        }, 400
+
+    # Validate optional category
+    allowed_categories = {
+        "network",
+        "hardware",
+        "software",
+        "security",
+        "account",
+        "general"
+    }
+
+    if category is not None:
+        if not isinstance(category, str):
+            return {"message": "Category must be a string"}, 400
+
+        category = category.strip().lower()
+
+        if category not in allowed_categories:
+            return {"message": "Invalid ticket category"}, 400
 
     user_id = int(get_jwt_identity())
 
-    # -----------------------------------
-    # AI ANALYSIS
-    # -----------------------------------
+    try:
+        # AI analysis
+        ai_result = predict_ticket(title, description)
 
-    ai_result = predict_ticket(
-        title,
-        description
-    )
+        predicted_category = ai_result["category"]
+        predicted_priority = ai_result["priority"]
 
-    predicted_category = ai_result["category"]
-    predicted_priority = ai_result["priority"]
+        final_category = category or predicted_category
 
-    # Use user-provided category if supplied.
-    # Otherwise use AI predicted category.
-    final_category = category or predicted_category
-
-    # -----------------------------------
-    # CREATE TICKET
-    # -----------------------------------
-
-    ticket = Ticket(
-        user_id=user_id,
-        title=title,
-        description=description,
-        category=final_category,
-        priority=predicted_priority,
-        status="open",
-        ai_category=predicted_category,
-        ai_priority=predicted_priority
-    )
-
-    db.session.add(ticket)
-    db.session.flush()
-
-    # -----------------------------------
-    # SAVE AI PREDICTION
-    # -----------------------------------
-
-    ai_prediction = AIPrediction(
-        ticket_id=ticket.id,
-        predicted_category=predicted_category,
-        predicted_priority=predicted_priority,
-        sentiment=ai_result["sentiment"],
-        confidence=ai_result["confidence"],
-        model_version=ai_result["model_version"]
-    )
-
-    db.session.add(ai_prediction)
-
-    # -----------------------------------
-    # CREATE HISTORY
-    # -----------------------------------
-
-    history = TicketHistory(
-        ticket_id=ticket.id,
-        changed_by=user_id,
-        old_status=None,
-        new_status=ticket.status,
-        action="CREATED",
-        details=(
-            f"Ticket created. "
-            f"AI predicted category={predicted_category}, "
-            f"priority={predicted_priority}, "
-            f"sentiment={ai_result['sentiment']}"
+        # Create ticket
+        ticket = Ticket(
+            user_id=user_id,
+            title=title,
+            description=description,
+            category=final_category,
+            priority=predicted_priority,
+            status="open",
+            ai_category=predicted_category,
+            ai_priority=predicted_priority
         )
-    )
 
-    db.session.add(history)
+        db.session.add(ticket)
+        db.session.flush()
 
-    db.session.commit()
+        # Save AI prediction
+        ai_prediction = AIPrediction(
+            ticket_id=ticket.id,
+            predicted_category=predicted_category,
+            predicted_priority=predicted_priority,
+            sentiment=ai_result["sentiment"],
+            confidence=ai_result["confidence"],
+            model_version=ai_result["model_version"]
+        )
 
-    return {
-        "message": "Ticket created successfully",
+        db.session.add(ai_prediction)
 
-        "ticket": {
-            "id": ticket.id,
-            "title": ticket.title,
-            "description": ticket.description,
-            "category": ticket.category,
-            "priority": ticket.priority,
-            "status": ticket.status,
-            "user_id": ticket.user_id,
-            "ai_category": ticket.ai_category,
-            "ai_priority": ticket.ai_priority
-        },
+        # Create ticket history
+        history = TicketHistory(
+            ticket_id=ticket.id,
+            changed_by=user_id,
+            old_status=None,
+            new_status=ticket.status,
+            action="CREATED",
+            details=(
+                "Ticket created. "
+                f"AI predicted category={predicted_category}, "
+                f"priority={predicted_priority}, "
+                f"sentiment={ai_result['sentiment']}"
+            )
+        )
 
-        "ai_analysis": {
-            "category": predicted_category,
-            "priority": predicted_priority,
-            "sentiment": ai_result["sentiment"],
-            "confidence": ai_result["confidence"],
-            "model_version": ai_result["model_version"]
-        }
-    }, 201
+        db.session.add(history)
+        db.session.commit()
+
+        return {
+            "message": "Ticket created successfully",
+            "ticket": {
+                "id": ticket.id,
+                "title": ticket.title,
+                "description": ticket.description,
+                "category": ticket.category,
+                "priority": ticket.priority,
+                "status": ticket.status,
+                "user_id": ticket.user_id,
+                "ai_category": ticket.ai_category,
+                "ai_priority": ticket.ai_priority
+            },
+            "ai_analysis": {
+                "category": predicted_category,
+                "priority": predicted_priority,
+                "sentiment": ai_result["sentiment"],
+                "confidence": ai_result["confidence"],
+                "model_version": ai_result["model_version"]
+            }
+        }, 201
+
+    except Exception:
+        db.session.rollback()
+        tickets_bp.logger.exception("Ticket creation failed")
+        return {
+            "message": "Ticket creation failed due to a server error"
+        }, 500
 
 
 @tickets_bp.route("", methods=["GET"])
