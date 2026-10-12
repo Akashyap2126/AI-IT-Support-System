@@ -30,11 +30,19 @@ CORS(
 limiter.init_app(app)
 
 
+
 # ==========================================
 # JWT CONFIGURATION
 # ==========================================
 
-app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+jwt_secret_key = os.getenv("JWT_SECRET_KEY")
+
+if not jwt_secret_key:
+    raise RuntimeError(
+        "JWT_SECRET_KEY is missing. Set it in the backend .env file."
+    )
+
+app.config["JWT_SECRET_KEY"] = jwt_secret_key
 
 jwt = JWTManager(app)
 
@@ -118,5 +126,7 @@ def health():
 # START SERVER
 # ==========================================
 
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    app.run(debug=debug_mode)
