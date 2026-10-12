@@ -519,20 +519,32 @@ def assign_ticket(ticket_id):
             "message": "Invalid or inactive agent"
         }, 400
 
-    ticket.assigned_to = agent.id
 
-    history = TicketHistory(
-        ticket_id=ticket.id,
-        changed_by=user_id,
-        old_status=ticket.status,
-        new_status=ticket.status,
-        action="ASSIGNED",
-        details=f"Ticket assigned to agent {agent.id}"
-    )
+    try:
+        ticket.assigned_to = agent.id
 
-    db.session.add(history)
+        history = TicketHistory(
+            ticket_id=ticket.id,
+            changed_by=user_id,
+            old_status=ticket.status,
+            new_status=ticket.status,
+            action="ASSIGNED",
+            details=f"Ticket assigned to agent {agent.id}"
+        )
 
-    db.session.commit()
+        db.session.add(history)
+        db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+        tickets_bp.logger.exception(
+            "Ticket assignment failed for ticket %s",
+            ticket_id
+        )
+        return {
+            "message": "Ticket assignment failed due to a server error"
+        }, 500
+
 
     return {
         "message": "Ticket assigned successfully",
